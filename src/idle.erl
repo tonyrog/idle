@@ -74,14 +74,7 @@ loop(TTY, I, Forms, Compile0, Bindings) ->
 		    end;
 		error:Reason:Stack ->
 		    errorf(TTY, "Error: ~p\r\n", [Reason]),
-		    lists:foreach(
-		      fun({M,F,A,Info}) ->
-			      errorf(TTY, "~s:~w: ~s:~s/~w\r\n", 
-				     [proplists:get_value(file,Info,"nofile"),
-				      proplists:get_value(line,Info,0),
-				      M, F, A])
-		      end, Stack),
-		    tty:outputf(TTY, "\r\n"),
+		    display_stack(TTY, Stack),
 		    loop(TTY, I+1, Forms, Compile,  Bindings);
 		throw:bye ->
 		    infof(TTY, "bye bye\r\n", []),
@@ -89,6 +82,23 @@ loop(TTY, I, Forms, Compile0, Bindings) ->
 	    end
 		
     end.
+
+display_stack(TTY, [{M,F,A,Info}|Stack]) ->
+    if 
+	M =:= ?MODULE -> %% stop here
+	    ok;
+	M =:= erl_eval -> %% skip erl_eval
+	    display_stack(TTY, Stack);
+       true ->
+	    errorf(TTY, "~s:~w: ~s:~s/~w\r\n", 
+		   [proplists:get_value(file,Info,"nofile"),
+		    proplists:get_value(line,Info,0),
+		    M, F, A]),
+	    display_stack(TTY, Stack)
+    end;
+display_stack(TTY, []) ->
+    tty:outputf(TTY, "\r\n").
+    
 
 display_error(TTY, Color, [{File,Es}|List]) ->    
     tty:csi(TTY, {fg, Color}),
@@ -204,41 +214,47 @@ parse(TTY, I, Ts) ->
 
 expand(RevLine) ->
     case erl_scan:string(lists:reverse(RevLine)) of
-	{ok, [{atom, _, M0}], _} ->
-	    expand_modules(code:all_loaded(), atom_to_list(M0), []);
-	{ok, [{atom, _, Mod},{':',_}], _} ->
-	    try apply(Mod, module_info, [exports]) of
-		Fs ->
-		    {yes, "", [atom_to_list(F) || {F,_} <- Fs]}
-	    catch
-		error:_ ->
-		    {no, "", []}
-	    end;
-	{ok, [{atom, _, Mod},{':',_},{atom,_,F0}], _} ->
-	    %% try expand all functions in module Mod starting with F0
-	    try apply(Mod, module_info, [exports]) of
-		Fs ->
-		    expand_functions(Fs, atom_to_list(F0), [])
-	    catch
-		error:_ ->
-		    {no, "", []}
-	    end;
-	{ok, [{atom, _, Mod},{':',_},{atom,_,F0},{'(',_}], _} ->
-	    %% find documentation
-	    try code:get_doc(Mod) of
-		{ok, #docs_v1{ format = Format } = Docs} 
-		  when ?RENDERABLE_FORMAT(Format) ->		
-		    case format_docs(shell_docs:render(Mod,F0,Docs)) of
-			{error,_} -> {no, "", []};
-			Text -> {yes, "", Text}
+	{ok, Ts, _} ->
+	    case lists:reverse(Ts) of
+		[{'(',_},{atom,_,F0},{':',_},{atom, _, Mod}|_] ->
+		    %% find documentation
+		    try code:get_doc(Mod) of
+			{ok, #docs_v1{ format = Format } = Docs} 
+			  when ?RENDERABLE_FORMAT(Format) ->		
+			    case format_docs(shell_docs:render(Mod,F0,Docs)) of
+				{error,_} -> {no, "", []};
+				Text -> {yes, "", Text}
+			    end;
+			_Error ->
+			    {no, "", []}
+		    catch
+			error:_ ->
+			    {no, "", []}
 		    end;
-		_Error ->
-		    {no, "", []}
-	    catch
-		error:_ ->
+		[{atom,_,F0},{':',_},{atom, _, Mod}|_] ->
+		    %% try expand all functions in module Mod starting with F0
+		    try apply(Mod, module_info, [exports]) of
+			Fs ->
+			    expand_functions(Fs, atom_to_list(F0), [])
+		    catch
+			error:_ ->
+			    {no, "", []}
+		    end;
+		[{':',_},{atom, _, Mod}|_] ->
+		    try apply(Mod, module_info, [exports]) of
+			Fs ->
+			    {yes, "", [atom_to_list(F) || {F,_} <- Fs]}
+		    catch
+			error:_ ->
+			    {no, "", []}
+		    end;	      
+		[{atom, _, M0}|_] ->
+		    expand_modules(code:all_loaded(), atom_to_list(M0), []);
+		_ ->
 		    {no, "", []}
 	    end;
-	_ ->
+
+	_Error ->
 	    {no, "", []}
     end.
 
