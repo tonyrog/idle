@@ -1,0 +1,9 @@
+{application, idle,
+ [{description, "Erlang mini IDLE"},
+  {vsn, git},
+  {modules, ["@@MODULES@@"]},
+%%  {mod, {App_app, []}},
+%%  {registered, [App_srv]},
+  {env, []},
+  {applications,[kernel,stdlib]}
+  ]}.
